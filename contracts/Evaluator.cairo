@@ -333,7 +333,7 @@ func ex4_declare_dead_animal{syscall_ptr: felt*, pedersen_ptr: HashBuiltin*, ran
         contract_address=submited_exercise_address, owner=evaluator_address
     );
 
-    // Getting an animal id of Evaluator. tokenOfOwnerByIndex should return the list of NFTs owned by and address
+    // Getting an animal id of Evaluator. tokenOfOwnerByIndex should return the list of NFTs owned by an address
     with_attr error_message("Can't get the token owner by the index") {
         let (token_id) = IExerciseSolution.token_of_owner_by_index(
             contract_address=submited_exercise_address, account=evaluator_address, index=0
