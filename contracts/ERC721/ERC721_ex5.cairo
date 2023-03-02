@@ -1,9 +1,9 @@
 %lang starknet
 
-from starkware.starknet.common.syscalls import get_caller_address
+from starkware.starknet.common.syscalls import get_caller_address, get_contract_address
 
 from starkware.cairo.common.cairo_builtins import HashBuiltin, SignatureBuiltin
-from starkware.cairo.common.uint256 import Uint256, uint256_add, uint256_check
+from starkware.cairo.common.uint256 import Uint256, uint256_add, uint256_check, assert_uint256_le
 
 from openzeppelin.token.erc721.library import ERC721
 from openzeppelin.introspection.erc165.library import ERC165
@@ -11,6 +11,7 @@ from openzeppelin.access.ownable.library import Ownable
 from starkware.cairo.common.math import assert_not_zero, assert_le
 
 from openzeppelin.token.erc721.enumerable.library import ERC721Enumerable
+from openzeppelin.token.erc20.IERC20 import IERC20
 from starkware.cairo.common.math import split_felt
 
 
@@ -57,8 +58,13 @@ func animals(token_id : Uint256) -> (animal : Animal) {
 }
 
 @storage_var
-func is_breeder(breeder_address : felt) -> (is_breeder : felt) {
+func _is_breeder(account : felt) -> (is_approved : felt) {
 }
+
+@storage_var
+func dummy_token_address_storage() -> (dummy_token_address_storage: felt) {
+}
+
 
 //
 // Getters
@@ -143,14 +149,12 @@ func get_animal_characteristics{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*
 }
 
 @view
-func get_is_breeder{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
-    address : felt
-) -> (is_true : felt) {
+func is_breeder{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(account : felt) -> (is_approved : felt) {
     with_attr error_message("ERC721: the zero address can't be a breeder") {
-        assert_not_zero(address);
+        assert_not_zero(account);
     }
-    let (is_true : felt) = is_breeder.read(address);
-    return (is_true,);
+    let (is_approved : felt) = _is_breeder.read(account);
+    return (is_approved,);
 }
 
 // Getting an animal id of Evaluator. tokenOfOwnerByIndex should return the list of NFTs owned by an address
@@ -170,9 +174,9 @@ func felt_to_uint256{pedersen_ptr: HashBuiltin*, syscall_ptr : felt*, range_chec
 }
 
 @view
-func get_registration_price{pedersen_ptr : HashBuiltin*, syscall_ptr : felt*, range_check_ptr} () -> (price: Uint256) {
-    let (price) =  registration_price();
-    return(price,);
+func registration_price{pedersen_ptr : HashBuiltin*, syscall_ptr : felt*, range_check_ptr}() -> (price: Uint256) {
+    let two_as_uint256 = Uint256(2, 0);
+    return (price=two_as_uint256);
 }
 
 //
@@ -251,7 +255,7 @@ func add_breeder{syscall_ptr: felt*, pedersen_ptr: HashBuiltin*, range_check_ptr
     with_attr error_message("ERC721: the zero address can't be a breeder") {
         assert_not_zero(breeder_address);
     }
-    is_breeder.write(breeder_address, 1);
+    _is_breeder.write(breeder_address, 1);
     return ();
 }
 
@@ -263,7 +267,7 @@ func remove_breeder{syscall_ptr: felt*, pedersen_ptr: HashBuiltin*, range_check_
     with_attr error_message("ERC721: the zero address can't be a breeder") {
         assert_not_zero(breeder_address);
     }
-    is_breeder.write(breeder_address, 0);
+    _is_breeder.write(breeder_address, 0);
     return ();
 }
 
@@ -301,38 +305,25 @@ func declare_dead_animal{pedersen_ptr : HashBuiltin*, syscall_ptr : felt*, range
 
 @external
 func register_me_as_breeder{pedersen_ptr : HashBuiltin*, syscall_ptr : felt*, range_check_ptr}() -> (is_added: felt) {
-    // get the calling contract
+    alloc_locals;
     let (sender_address) = get_caller_address();
     let (this_contract) = get_contract_address();
-    let (sender_balance) = IERC20.balanceOf(
-        contract_address=dummy_token_address, account=sender_address
-    );
-    let (registration_price) = registration_price();
+    let (reg_price) = registration_price();
+    let (dummy_token_address) = dummy_token_address_storage.read();
 
     // call breeder_wannabe_balance
+    // This step is not necessary as the lack of balance would simply make the transaction fail.
+    breeder_wannabe_has_balance();
 
-    // check if the caller has enough balance to cover the registration price
-    if (sender_balance >= registration_price) {
-        // caller has enough balance. Charge:
-        IERC20.transfer_from(from_=sender_address, to=this_contract, value=registration_price);
-        // caller has enough balance. Charge was successfull, now the caller's contract should be added to the breeder's list
-        is_breeder.write(sender_address, 1);
-        let (is_added) = 1;
-        return ();
-    } else {
-        return ();
-    }
-        // if so, ask permission to charge the registration price
-            // if permission is granted, 
-                // charge
-                // write new breeder's address to the breeder storage
-                // let (is_added) = 1;
-            // if permission is not granted
-                // abort
-        // if not, raise error "you do not have enough funds to cover the registration price
-        // let (is_added) = 0;
-    // return success
-    is_breeder.write(breeder_address, 1);
+    IERC20.transferFrom(
+        contract_address=dummy_token_address,
+        sender=sender_address,
+        recipient=this_contract,
+        amount=reg_price,
+    );
+    _is_breeder.write(sender_address, 1);
+
+    let (is_added : felt) = _is_breeder.read(sender_address);
     return (is_added,);
     
 }
@@ -345,26 +336,23 @@ func token_id_initializer{pedersen_ptr : HashBuiltin*, syscall_ptr : felt*, rang
 
 func assert_only_breeder{pedersen_ptr : HashBuiltin*, syscall_ptr : felt*, range_check_ptr}() {
     let (sender_address) = get_caller_address();
-    let (is_true) = is_breeder.read(sender_address);
+    let (is_true) = _is_breeder.read(sender_address);
     with_attr error_message("Caller is not a registered breeder") {
         assert is_true = 1;
     }
     return ();
 }
 
-func registration_price() -> (price: Uint256) {
-    let price =  100000000000000;
-    return(price,);
-}
 
 func breeder_wannabe_has_balance{pedersen_ptr : HashBuiltin*, syscall_ptr : felt*, range_check_ptr}() {
     let (sender_address) = get_caller_address();
+    let (dummy_token_address) = dummy_token_address_storage.read();
     let (sender_balance) = IERC20.balanceOf(
         contract_address=dummy_token_address, account=sender_address
     );
-    let (registration_price) = registration_price();
+    let (_registration_price) = registration_price();
     with_attr error_message("Caller doesn't have enough balance") {
-        assert_le(registration_price, sender_address);
+        assert_uint256_le(_registration_price, sender_balance);
     }
     return ();
 }
